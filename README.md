@@ -1,32 +1,32 @@
 # OpenRouter Credit MenuBar
 
-A sleek macOS menu bar application for monitoring your OpenRouter API credits in real-time.
+A professional macOS menu bar application for monitoring OpenRouter API credits with comprehensive connection testing.
 
 ![OpenRouter Credit MenuBar](screenshots/1.png)
 ![OpenRouter Credit MenuBar](screenshots/2.png)
 
-
 ## Features
 
 - **Real-time Credit Monitoring**: Display your OpenRouter credit balance directly in the menu bar
-- **Automatic Refresh**: Configurable refresh intervals (30 seconds default)
-- **Clean Interface**: Minimalist menu bar design that shows your available credit at a glance
-- **Secure Configuration**: Encrypted API key storage with connection testing
+- **Comprehensive Connection Testing**: Test multiple API endpoints with detailed progress reporting
+- **Automatic Refresh**: Configurable refresh intervals (30 seconds to 1 hour)
+- **Enhanced Connection Testing**: Sequential endpoint testing with real-time progress updates
+- **Visual Feedback**: Loading indicators, success checkmarks, and error indicators
+- **Single Keychain Access**: Optimized API key management with caching
+- **Professional Settings Window**: Proper focus management with taller window design
 - **Launch at Login**: Optional automatic startup when you log in
-- **Settings Panel**: Easy-to-use configuration window
+- **Secure Configuration**: Encrypted API key storage with comprehensive connection testing
 
 ## Screenshots
 
 ### Menu Bar Display
-The app shows your current available credit ($98.1809 in the example) directly in a dropdown menu.
+The app shows your current available credit directly in the menu bar.
 
 ### Settings Window
 - Toggle credit monitoring on/off
-- Set launch at login preferences  
+- Set launch at login preferences
 - Configure refresh intervals
 - Securely enter and test your OpenRouter API key
-
-
 
 ## Requirements
 
@@ -37,23 +37,20 @@ The app shows your current available credit ($98.1809 in the example) directly i
 ## Installation
 
 ### From Release
-1. Download the latest release from the [Releases](../../releases) page
+1. Download the latest release
 2. Extract the .zip file
 3. Move the application to your Applications folder
 4. Launch the app and grant necessary permissions when prompted
 
 ### From Source
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/kittizz/OpenRouterCreditMenuBar.git
-   ```
+1. Clone this repository
 2. Open `OpenRouterCreditMenuBar.xcodeproj` in Xcode
 3. Build and run the project (⌘+R)
 
 ## Setup & Configuration
 
-1. **Get Your API Key**: 
-   - Visit [OpenRouter](https://openrouter.ai) and create an account
+1. **Get Your API Key**:
+   - Visit OpenRouter and create an account
    - Navigate to your API keys section
    - Generate a new API key
 
@@ -74,10 +71,19 @@ The app shows your current available credit ($98.1809 in the example) directly i
 
 - **View Credits**: Click the menu bar icon to see your current available credit
 - **Refresh**: Use the "Refresh" button to manually update your balance
+- **Test Connection**: Verify API connectivity with comprehensive endpoint testing
 - **Settings**: Access configuration options through the Settings button
+- **View Activity**: Open OpenRouter activity page directly from the menu
 - **Quit**: Close the application using the Quit button
 
-The menu bar will display your credit balance and update automatically based on your configured refresh interval.
+### Connection Testing
+
+The connection testing feature allows you to:
+- Test multiple OpenRouter API endpoints sequentially
+- See real-time progress updates for each test
+- Receive comprehensive success/failure feedback
+- Get specific error messages with recovery suggestions
+- Verify your API key and server connectivity
 
 ## Development
 
@@ -95,6 +101,7 @@ This project is built with:
 4. Build using ⌘+B or run with ⌘+R
 
 ### Project Structure
+
 - Menu bar integration with real-time updates
 - Secure keychain storage for API credentials
 - Native macOS UI with dark mode support
@@ -117,7 +124,7 @@ The application runs in a sandboxed environment for enhanced security.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome!
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
@@ -127,21 +134,42 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-MIT License [LICENSE](LICENSE)
+MIT License
 
 ## Support
 
 If you encounter any issues or have questions:
-- [Open an issue](../../issues) on GitHub
-- Check existing issues for common solutions
+- Check the documentation
+- Review the setup instructions
 
-## Roadmap
+## Current Status
 
-- [ ] Credit usage history and analytics
-- [ ] Multiple account support
-- [ ] Custom notification thresholds
-- [ ] Export credit usage data
+✅ **All Core Features Implemented**:
+- Real-time credit monitoring with menu bar display
+- Comprehensive connection testing with multiple endpoints
+- Secure API key management with single keychain access
+- Professional settings window with proper focus management
+- Enhanced user experience with visual feedback
+
+## Future Enhancements
+
+Potential future features:
+- Credit usage history and analytics
+- Multiple account support
+- Custom notification thresholds
+- Export credit usage data
+- Token usage tracking integration
 
 ---
 
-**Note**: This application is not officially affiliated with OpenRouter. It's a community-developed tool for monitoring API credits.
+## 🤝 Inspiration & Attribution
+
+This application builds upon the foundation established by the [OpenRouterCreditMenuBar](https://github.com/kittizz/OpenRouterCreditMenuBar) project. The current implementation maintains the core concept of monitoring OpenRouter API credits while introducing several improvements:
+
+- **Enhanced Connection Testing**: Multi-endpoint testing with real-time progress updates
+- **Professional UI**: Proper focus management and improved window handling
+- **Optimized Performance**: Single keychain access with API key caching
+- **Comprehensive Feedback**: Visual indicators and clear success/failure messages
+- **Improved Error Handling**: User-friendly messages with recovery suggestions
+
+**Note**: This application provides comprehensive OpenRouter API credit monitoring with professional macOS integration and enhanced connection testing capabilities. The implementation represents an evolution of the original concept with improvements focused on user experience and functionality.

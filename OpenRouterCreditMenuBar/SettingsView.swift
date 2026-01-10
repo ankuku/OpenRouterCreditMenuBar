@@ -37,7 +37,7 @@ struct SettingsView: View {
                     Text("Refresh Interval")
                         .font(.headline)
 
-                    Picker("Refresh Interval", selection: $refreshInterval) {
+                    Picker("How often to check credit balance", selection: $refreshInterval) {
                         Text("30 seconds").tag(30.0)
                         Text("1 minute").tag(60.0)
                         Text("3 minutes").tag(180.0)
@@ -50,10 +50,6 @@ struct SettingsView: View {
                     .onChange(of: refreshInterval) { _, newValue in
                         creditManager.refreshInterval = newValue
                     }
-
-                    Text("How often to check credit balance")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
                 }
             }
 
@@ -63,18 +59,64 @@ struct SettingsView: View {
                     .onChange(of: apiKey) { _, newValue in
                         creditManager.apiKey = newValue
                     }
-                HStack {
-                    Button("Test Connection") {
-                        Task {
-                            await creditManager.fetchCredit()
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Button("Test Connection") {
+                            Task {
+                                await creditManager.testConnection()
+                            }
+                        }
+                        .disabled(apiKey.isEmpty)
+
+                        if creditManager.isLoading {
+                            ProgressView()
+                                .scaleEffect(0.5)
+                        }
+
+                        // Show connection test result
+                        if let testResult = creditManager.connectionTestStatus {
+                            if testResult.success {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                            } else {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.red)
+                            }
                         }
                     }
-                    .disabled(apiKey.isEmpty)
 
-                    if creditManager.isLoading {
-                        ProgressView()
-                            .scaleEffect(0.5)
+                    // Show detailed test progress
+                    if let progress = creditManager.connectionTestProgress {
+                        HStack {
+                            if creditManager.isLoading {
+                                ProgressView()
+                                    .scaleEffect(0.4)
+                            }
+                            Text(progress)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
+                }
+
+                // Show detailed test result message
+                if let testResult = creditManager.connectionTestStatus {
+                    HStack {
+                        if testResult.success {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                            Text(testResult.errorMessage ?? "Connection successful")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        } else {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.red)
+                            Text(testResult.errorMessage ?? "Connection failed")
+                                .font(.caption)
+                                .foregroundColor(.red)
+                        }
+                    }
+                    .padding(.top, 4)
                 }
             }
 

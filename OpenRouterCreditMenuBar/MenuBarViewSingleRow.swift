@@ -1,16 +1,13 @@
+//
+//  MenuBarViewSingleRow.swift
+//  OpenRouterCreditMenuBar
+//
+//  Single row menu bar view with adjusted padding and font size
+//
+
 import SwiftUI
 
-struct MenuBarView: View {
-
-    private func formatTokens(_ tokens: Int) -> String {
-        if tokens >= 1_000_000 {
-            return String(format: "%.1fM", Double(tokens) / 1_000_000)
-        } else if tokens >= 1_000 {
-            return String(format: "%.1fK", Double(tokens) / 1_000)
-        } else {
-            return "\(tokens)"
-        }
-    }
+struct MenuBarViewSingleRow: View {
     @EnvironmentObject var creditManager: OpenRouterCreditManager
 
     var body: some View {
@@ -33,22 +30,31 @@ struct MenuBarView: View {
                         .font(.caption)
                 }
             } else if let credit = creditManager.currentCredit {
-                VStack(spacing: 4) {
-                    Text("Available Credit")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text("$\(String(format: "%.4f", credit))")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                }
+                // Single row design with larger font (10pt), no bold
+                Text(String(format: "$%.4f", credit))
+                    .font(.system(size: 10))
+                    .fontWeight(.regular)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity)
             } else if let error = creditManager.errorMessage {
                 VStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle")
                         .foregroundColor(.orange)
-                    Text("Error")
+                    Text("Credit Tracking Error")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Text(error)
+                        .font(.caption2)
+                        .multilineTextAlignment(.center)
+                }
+            } else if creditManager.apiKey.isEmpty {
+                VStack(spacing: 4) {
+                    Image(systemName: "key.fill")
+                        .foregroundColor(.blue)
+                    Text("API Key Required")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("Please set your OpenRouter API key in Settings to track your credit balance.")
                         .font(.caption2)
                         .multilineTextAlignment(.center)
                 }
@@ -71,8 +77,8 @@ struct MenuBarView: View {
                 }
                 .controlSize(.small)
 
-                SettingsLink {
-                    Text("Settings")
+                Button("Settings") {
+                    NSApp.sendAction(#selector(AppDelegate.showSettingsWindow), to: nil, from: nil)
                 }
                 .controlSize(.small)
 
