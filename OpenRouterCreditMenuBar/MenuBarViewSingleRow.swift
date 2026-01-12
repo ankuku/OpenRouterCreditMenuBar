@@ -10,6 +10,22 @@ import SwiftUI
 struct MenuBarViewSingleRow: View {
     @EnvironmentObject var creditManager: OpenRouterCreditManager
 
+    private func formatTokens(_ tokens: Int) -> String {
+        if tokens >= 1_000_000 {
+            return String(format: "%.1fM", Double(tokens) / 1_000_000)
+        } else if tokens >= 1_000 {
+            return String(format: "%.1fK", Double(tokens) / 1_000)
+        } else {
+            return "\(tokens)"
+        }
+    }
+    
+    private func getRelativeTime(for date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             HStack {
@@ -30,12 +46,40 @@ struct MenuBarViewSingleRow: View {
                         .font(.caption)
                 }
             } else if let credit = creditManager.currentCredit {
-                // Single row design with larger font (10pt), no bold
-                Text(String(format: "$%.4f", credit))
-                    .font(.system(size: 10))
-                    .fontWeight(.regular)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity)
+                VStack(spacing: 4) {
+                    // Credit Amount
+                    Text(String(format: "$%.4f", credit))
+                        .font(.system(size: 12))
+                        .fontWeight(.medium)
+                        .frame(maxWidth: .infinity)
+                    
+                    // Token Usage Stats
+                    if let tokensIn = creditManager.tokensIn, let tokensOut = creditManager.tokensOut {
+                        HStack(spacing: 12) {
+                            HStack(spacing: 2) {
+                                Image(systemName: "arrow.down.circle.fill")
+                                    .font(.system(size: 8))
+                                Text(formatTokens(tokensIn))
+                            }
+                            
+                            HStack(spacing: 2) {
+                                Image(systemName: "arrow.up.circle.fill")
+                                    .font(.system(size: 8))
+                                Text(formatTokens(tokensOut))
+                            }
+                        }
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                    }
+                    
+                    if let lastUpdated = creditManager.lastUpdated {
+                        Text("Updated \(getRelativeTime(for: lastUpdated))")
+                            .font(.system(size: 8))
+                            .foregroundColor(.secondary.opacity(0.7))
+                            .padding(.top, 1)
+                    }
+                }
+                .padding(.vertical, 4)
             } else if let error = creditManager.errorMessage {
                 VStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle")

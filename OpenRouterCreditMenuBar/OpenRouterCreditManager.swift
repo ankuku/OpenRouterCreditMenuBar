@@ -66,6 +66,7 @@ class OpenRouterCreditManager: ObservableObject {
     @Published var totalUsage: Double?
     @Published var tokensIn: Int?
     @Published var tokensOut: Int?
+    @Published var lastUpdated: Date?
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var connectionTestStatus: ConnectionTestResult? = nil
@@ -73,6 +74,7 @@ class OpenRouterCreditManager: ObservableObject {
 
     private let userDefaults = UserDefaults.standard
     private var refreshTimer: Timer?
+    private let cacheKey = "token_usage_cache"
 
     // MARK: - Connection Testing
 
@@ -240,11 +242,15 @@ class OpenRouterCreditManager: ObservableObject {
             return key
         }
         set {
+            // Trim whitespace and newlines
+            let cleanKey = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            
             // Clear cache when setting new value
             cachedAPIKey = nil
-            if !newValue.isEmpty {
-                _ = SimpleSecureStorage.storeAPIKeySecurely(newValue)
-            } else {
+            if !cleanKey.isEmpty {
+                _ = SimpleSecureStorage.storeAPIKeySecurely(cleanKey)
+            }
+            else {
                 SimpleSecureStorage.clearAPIKeySecurely()
             }
         }
@@ -271,6 +277,12 @@ class OpenRouterCreditManager: ObservableObject {
     }
 
     init() {
+        // Load latest cached data on initialization from history dump
+        if let cache = loadCache(), let latest = cache.history.last {
+            self.tokensIn = latest.tokensIn
+            self.tokensOut = latest.tokensOut
+            self.lastUpdated = latest.date
+        }
         setupTimer()
     }
 
@@ -298,6 +310,38 @@ class OpenRouterCreditManager: ObservableObject {
         refreshTimer = nil
     }
 
+    // MARK: - Caching
+    
+    struct TokenUsageEntry: Codable {
+        let tokensIn: Int
+        let tokensOut: Int
+        let date: Date
+    }
+
+    struct TokenUsageCache: Codable {
+        var history: [TokenUsageEntry] = []
+    }
+
+    private func saveToCache(tokensIn: Int, tokensOut: Int, date: Date) {
+        var cache = loadCache() ?? TokenUsageCache()
+        let newEntry = TokenUsageEntry(tokensIn: tokensIn, tokensOut: tokensOut, date: date)
+        
+        // Append to history
+        cache.history.append(newEntry)
+        
+        // Keep history manageable (e.g., last 100 entries) if needed, 
+        // but user requested a "dump of all past", so I'll keep them for now.
+        
+        if let encoded = try? JSONEncoder().encode(cache) {
+            userDefaults.set(encoded, forKey: cacheKey)
+        }
+    }
+
+    private func loadCache() -> TokenUsageCache? {
+        guard let data = userDefaults.data(forKey: cacheKey) else { return nil }
+        return try? JSONDecoder().decode(TokenUsageCache.self, from: data)
+    }
+
     func fetchCredit() async {
         guard !apiKey.isEmpty && isEnabled else { return }
 
@@ -307,23 +351,39 @@ class OpenRouterCreditManager: ObservableObject {
         }
 
         do {
+            // Fetch credit primarily
             let creditData = try await fetchCreditFromAPI()
+            
+            // Attempt to fetch token usage, but don't fail the whole operation if it fails
+            var tokenUsage: TokenUsageData? = nil
+            do {
+                tokenUsage = try await fetchTokenUsageFromAPI()
+            } catch {
+                print("Token usage fetch failed: \(error.localizedDescription)")
+                // We proceed without token usage update, keeping old values or showing partial data
+            }
+
+            let now = Date()
 
             await MainActor.run {
                 self.currentCredit = creditData.total_credits - creditData.total_usage
                 self.totalUsage = creditData.total_usage
-                self.tokensIn = nil
-                self.tokensOut = nil
+                
+                if let usage = tokenUsage {
+                    self.tokensIn = usage.tokensIn
+                    self.tokensOut = usage.tokensOut
+                    
+                    // Persist to historical dump in local storage only if we got new data
+                    self.saveToCache(tokensIn: usage.tokensIn, tokensOut: usage.tokensOut, date: now)
+                }
+                
+                self.lastUpdated = now
                 self.isLoading = false
             }
+            
         } catch let error as OpenRouterAPIError {
             await MainActor.run {
-                // Update error messages to be strictly about credit tracking
-                if error.localizedDescription.contains("token") || error.localizedDescription.contains("Token") {
-                    self.errorMessage = "Invalid or missing API key for credit tracking"
-                } else {
-                    self.errorMessage = error.localizedDescription
-                }
+                self.errorMessage = error.localizedDescription
                 if let suggestion = error.recoverySuggestion {
                     self.errorMessage? += "\n" + suggestion
                 }

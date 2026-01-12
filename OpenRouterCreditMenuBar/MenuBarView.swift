@@ -11,6 +11,12 @@ struct MenuBarView: View {
             return "\(tokens)"
         }
     }
+    private func getRelativeTime(for date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
     @EnvironmentObject var creditManager: OpenRouterCreditManager
 
     var body: some View {
@@ -33,13 +39,40 @@ struct MenuBarView: View {
                         .font(.caption)
                 }
             } else if let credit = creditManager.currentCredit {
-                VStack(spacing: 4) {
-                    Text("Available Credit")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                VStack(spacing: 2) {
+                    // Row 1: Credit Amount
                     Text("$\(String(format: "%.4f", credit))")
-                        .font(.title2)
-                        .fontWeight(.semibold)
+                        .font(.headline)
+                        .fontWeight(.medium)
+                        .frame(maxWidth: .infinity)
+
+                    // Row 2: Token Usage Stats
+                    if let tokensIn = creditManager.tokensIn, let tokensOut = creditManager.tokensOut {
+                        HStack(spacing: 8) {
+                            HStack(spacing: 2) {
+                                Image(systemName: "arrow.down.circle.fill")
+                                    .font(.system(size: 8))
+                                Text(formatTokens(tokensIn))
+                            }
+                            .help("Input Tokens")
+
+                            HStack(spacing: 2) {
+                                Image(systemName: "arrow.up.circle.fill")
+                                    .font(.system(size: 8))
+                                Text(formatTokens(tokensOut))
+                            }
+                            .help("Output Tokens")
+                        }
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    }
+
+                    if let lastUpdated = creditManager.lastUpdated {
+                        Text("Updated \(getRelativeTime(for: lastUpdated))")
+                            .font(.system(size: 8))
+                            .foregroundColor(.secondary.opacity(0.7))
+                            .padding(.top, 4)
+                    }
                 }
             } else if let error = creditManager.errorMessage {
                 VStack(spacing: 4) {
