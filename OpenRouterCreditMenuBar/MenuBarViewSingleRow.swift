@@ -10,16 +10,6 @@ import SwiftUI
 struct MenuBarViewSingleRow: View {
     @EnvironmentObject var creditManager: OpenRouterCreditManager
 
-    private func formatTokens(_ tokens: Int) -> String {
-        if tokens >= 1_000_000 {
-            return String(format: "%.1fM", Double(tokens) / 1_000_000)
-        } else if tokens >= 1_000 {
-            return String(format: "%.1fK", Double(tokens) / 1_000)
-        } else {
-            return "\(tokens)"
-        }
-    }
-    
     private func getRelativeTime(for date: Date) -> String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
@@ -92,26 +82,6 @@ struct MenuBarViewSingleRow: View {
                                     .foregroundColor(.secondary)
                             }
                         }
-                    }
-                    
-                    // Token Usage Stats (Global)
-                    if let tokensIn = creditManager.tokensIn, let tokensOut = creditManager.tokensOut {
-                        HStack(spacing: 12) {
-                            HStack(spacing: 2) {
-                                Image(systemName: "arrow.down.circle.fill")
-                                    .font(.system(size: 8))
-                                Text(formatTokens(tokensIn))
-                            }
-                            
-                            HStack(spacing: 2) {
-                                Image(systemName: "arrow.up.circle.fill")
-                                    .font(.system(size: 8))
-                                Text(formatTokens(tokensOut))
-                            }
-                        }
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
-                        .padding(.top, 2)
                     }
                     
                     if let lastUpdated = creditManager.lastUpdated {

@@ -23,44 +23,18 @@ struct OpenRouterCreditMenuBarApp: App {
 struct MenuBarDisplayView: View {
     @ObservedObject var creditManager: OpenRouterCreditManager
     
-    private func formatTokens(_ tokens: Int) -> String {
-        if tokens >= 1_000_000 {
-            return String(format: "%.1fM", Double(tokens) / 1_000_000)
-        } else if tokens >= 1_000 {
-            return String(format: "%.1fK", Double(tokens) / 1_000)
-        } else {
-            return "\(tokens)"
-        }
-    }
-    
     var body: some View {
         VStack(alignment: .center, spacing: 0) {
             if let credit = creditManager.currentCredit {
-                // Row 1: Credit
                 Text("$\(String(format: "%.2f", credit))")
-                    .font(.system(size: 10, weight: .regular))
-                    .frame(height: 11, alignment: .bottom)
-                
-                // Row 2: Tokens
-                if let tokensIn = creditManager.tokensIn, let tokensOut = creditManager.tokensOut {
-                    Text("\(formatTokens(tokensIn))/\(formatTokens(tokensOut))")
-                        .font(.system(size: 8, weight: .regular))
-                        .foregroundColor(.secondary)
-                        .frame(height: 9, alignment: .top)
-                } else {
-                    // Placeholder to maintain 2-row layout height if tokens not yet loaded
-                    Text("- / -")
-                        .font(.system(size: 8, weight: .regular))
-                        .foregroundColor(.secondary)
-                        .frame(height: 9, alignment: .top)
-                }
+                    .font(.system(size: 11, weight: .medium)) // Slightly larger for readability
             } else {
-                Text("Loading...")
-                    .font(.system(size: 10, weight: .regular))
+                Text("...")
+                    .font(.system(size: 11, weight: .regular))
             }
         }
-        .padding(.horizontal, 2)
-        .frame(height: 22) // Explicitly match menu bar height
+        .padding(.horizontal, 4)
+        .frame(height: 22)
     }
 }
 

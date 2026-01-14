@@ -81,15 +81,11 @@ class OpenRouterCreditManager: ObservableObject {
     @Published var totalUsage: Double?
     @Published var usageCost: Double?
     @Published var limitCost: Double?
-    @Published var tokensIn: Int?
-    @Published var tokensOut: Int?
     
     // Multi-key support
     @Published var apiKeyStatuses: [APIKeyStatus] = []
     
     // Cumulative Stats
-    @Published var cumulativeTokensIn: Int = 0
-    @Published var cumulativeTokensOut: Int = 0
     @Published var cumulativeUsageCost: Double = 0.0
     
     @Published var lastUpdated: Date?
@@ -100,8 +96,127 @@ class OpenRouterCreditManager: ObservableObject {
 
     private let userDefaults = UserDefaults.standard
     private var refreshTimer: Timer?
-    private let cacheKey = "token_usage_cache"
     private let storageManager = FileStorageManager()
+    
+    private var cachedAPIKey: String? = nil
+    private var cachedAPIKeyEntries: [APIKeyEntry]? = nil
+
+    var useMultipleKeys: Bool {
+        get {
+            userDefaults.bool(forKey: "use_multiple_keys")
+        }
+        set {
+            userDefaults.set(newValue, forKey: "use_multiple_keys")
+            // Clear caches to force reload if needed
+            cachedAPIKey = nil
+            cachedAPIKeyEntries = nil
+            
+            Task {
+                 await fetchCredit()
+            }
+        }
+    }
+
+    var apiKey: String {
+        get {
+            if let cached = cachedAPIKey {
+                return cached
+            }
+            let key = SimpleSecureStorage.retrieveAPIKeySecurely() ?? ""
+            cachedAPIKey = key
+            return key
+        }
+        set {
+            // Trim whitespace and newlines
+            let cleanKey = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            // Clear cache when setting new value
+            cachedAPIKey = nil
+            if !cleanKey.isEmpty {
+                _ = SimpleSecureStorage.storeAPIKeySecurely(cleanKey)
+            }
+            else {
+                SimpleSecureStorage.clearAPIKeySecurely()
+            }
+        }
+    }
+    
+    var apiKeyEntries: [APIKeyEntry] {
+        get {
+            if let cached = cachedAPIKeyEntries {
+                return cached
+            }
+            let entries = SimpleSecureStorage.retrieveAPIKeyEntriesSecurely()
+            cachedAPIKeyEntries = entries
+            return entries
+        }
+        set {
+            cachedAPIKeyEntries = nil
+            _ = SimpleSecureStorage.storeAPIKeyEntriesSecurely(newValue)
+        }
+    }
+
+    var isEnabled: Bool {
+        get {
+            userDefaults.bool(forKey: "app_enabled")
+        }
+        set {
+            userDefaults.set(newValue, forKey: "app_enabled")
+        }
+    }
+
+    var refreshInterval: Double {
+        get {
+            let interval = userDefaults.double(forKey: "refresh_interval")
+            return interval > 0 ? interval : 300  // default 5 minutes
+        }
+        set {
+            userDefaults.set(newValue, forKey: "refresh_interval")
+            setupTimer()
+        }
+    }
+
+    init() {
+        // Load cached history on initialization
+        let history = storageManager.loadHistory()
+        updateCumulativeStats(history: history)
+        
+        // Also try to load the latest snapshot for display
+        if let latest = history.first { // History is sorted desc
+            self.usageCost = latest.usageCost
+            self.lastUpdated = latest.date
+        }
+        setupTimer()
+    }
+    
+    private func updateCumulativeStats(history: [TokenUsageEntry]) {
+        self.cumulativeUsageCost = history.reduce(0.0) { $0 + ($1.usageCost ?? 0.0) }
+    }
+
+    private func setupTimer() {
+        refreshTimer?.invalidate()
+
+        let hasKey = useMultipleKeys ? !apiKeyEntries.isEmpty : !apiKey.isEmpty
+        guard isEnabled && hasKey else { return }
+
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { _ in
+            Task {
+                await self.fetchCredit()
+            }
+        }
+    }
+
+    func startMonitoring() {
+        setupTimer()
+        Task {
+            await fetchCredit()
+        }
+    }
+
+    func stopMonitoring() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+    }
 
     // MARK: - Connection Testing
 
@@ -176,7 +291,6 @@ class OpenRouterCreditManager: ObservableObject {
             connectionTestProgress = "Connection failed: " + (result.errorMessage ?? "Unknown error")
         }
     }
-
 
     private func testAuthEndpoint(key: String) async -> ConnectionTestResult? {
         // Try lightweight auth endpoint first (if it exists)
@@ -301,130 +415,6 @@ class OpenRouterCreditManager: ObservableObject {
         }
     }
 
-    private var cachedAPIKey: String? = nil
-    private var cachedAPIKeyEntries: [APIKeyEntry]? = nil
-
-    var useMultipleKeys: Bool {
-        get {
-            userDefaults.bool(forKey: "use_multiple_keys")
-        }
-        set {
-            userDefaults.set(newValue, forKey: "use_multiple_keys")
-            // Clear caches to force reload if needed
-            cachedAPIKey = nil
-            cachedAPIKeyEntries = nil
-            
-            Task {
-                 await fetchCredit()
-            }
-        }
-    }
-
-    var apiKey: String {
-        get {
-            if let cached = cachedAPIKey {
-                return cached
-            }
-            let key = SimpleSecureStorage.retrieveAPIKeySecurely() ?? ""
-            cachedAPIKey = key
-            return key
-        }
-        set {
-            // Trim whitespace and newlines
-            let cleanKey = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            
-            // Clear cache when setting new value
-            cachedAPIKey = nil
-            if !cleanKey.isEmpty {
-                _ = SimpleSecureStorage.storeAPIKeySecurely(cleanKey)
-            }
-            else {
-                SimpleSecureStorage.clearAPIKeySecurely()
-            }
-        }
-    }
-    
-    var apiKeyEntries: [APIKeyEntry] {
-        get {
-            if let cached = cachedAPIKeyEntries {
-                return cached
-            }
-            let entries = SimpleSecureStorage.retrieveAPIKeyEntriesSecurely()
-            cachedAPIKeyEntries = entries
-            return entries
-        }
-        set {
-            cachedAPIKeyEntries = nil
-            _ = SimpleSecureStorage.storeAPIKeyEntriesSecurely(newValue)
-        }
-    }
-
-    var isEnabled: Bool {
-        get {
-            userDefaults.bool(forKey: "app_enabled")
-        }
-        set {
-            userDefaults.set(newValue, forKey: "app_enabled")
-        }
-    }
-
-    var refreshInterval: Double {
-        get {
-            let interval = userDefaults.double(forKey: "refresh_interval")
-            return interval > 0 ? interval : 300  // default 5 minutes
-        }
-        set {
-            userDefaults.set(newValue, forKey: "refresh_interval")
-            setupTimer()
-        }
-    }
-
-    init() {
-        // Load cached history on initialization
-        let history = storageManager.loadHistory()
-        updateCumulativeStats(history: history)
-        
-        // Also try to load the latest snapshot for display
-        if let latest = history.first { // History is sorted desc
-            self.tokensIn = latest.tokensIn
-            self.tokensOut = latest.tokensOut
-            self.usageCost = latest.usageCost
-            self.lastUpdated = latest.date
-        }
-        setupTimer()
-    }
-    
-    private func updateCumulativeStats(history: [TokenUsageEntry]) {
-        self.cumulativeTokensIn = history.reduce(0) { $0 + ($1.tokensIn ?? 0) }
-        self.cumulativeTokensOut = history.reduce(0) { $0 + ($1.tokensOut ?? 0) }
-        self.cumulativeUsageCost = history.reduce(0.0) { $0 + ($1.usageCost ?? 0.0) }
-    }
-
-    private func setupTimer() {
-        refreshTimer?.invalidate()
-
-        let hasKey = useMultipleKeys ? !apiKeyEntries.isEmpty : !apiKey.isEmpty
-        guard isEnabled && hasKey else { return }
-
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { _ in
-            Task {
-                await self.fetchCredit()
-            }
-        }
-    }
-
-    func startMonitoring() {
-        setupTimer()
-        Task {
-            await fetchCredit()
-        }
-    }
-
-    func stopMonitoring() {
-        refreshTimer?.invalidate()
-        refreshTimer = nil
-    }
-
     func fetchCredit() async {
         let hasKey = useMultipleKeys ? !apiKeyEntries.isEmpty : !apiKey.isEmpty
         guard hasKey && isEnabled else { return }
@@ -438,26 +428,16 @@ class OpenRouterCreditManager: ObservableObject {
             let primaryKey = useMultipleKeys ? apiKeyEntries.first!.key : apiKey
             
             async let creditTask = fetchCreditFromAPI(key: primaryKey)
-            
-            // Trigger full history fetch in background
-            Task {
-                await self.fetchAndCacheAllActivity(key: primaryKey)
-            }
-            
-            // Also attempt token usage (legacy/provisioning keys)
-            let tokenUsageTask = Task { () -> TokenUsageData? in
-                try? await self.fetchTokenUsageFromAPI(key: primaryKey)
-            }
 
             if useMultipleKeys {
                 var newStatuses: [APIKeyStatus] = []
                 
-                await withTaskGroup(of: APIKeyStatus.self) { group in
+                await withTaskGroup(of: APIKeyStatus.self) {
+                    group in
                     for entry in apiKeyEntries {
                         group.addTask {
                             do {
                                 let details = try await self.fetchKeyDetailsFromAPI(key: entry.key)
-                                // Use local name if available, otherwise fallback (though local name is mandatory now)
                                 return APIKeyStatus(entry: entry, usage: details.usage, limit: details.limit, error: nil)
                             } catch {
                                 return APIKeyStatus(entry: entry, usage: nil, limit: nil, error: error.localizedDescription)
@@ -476,18 +456,12 @@ class OpenRouterCreditManager: ObservableObject {
                 }
                 
                 let creditData = try await creditTask
-                let tokenUsage = await tokenUsageTask.value
                 let now = Date()
                 
                 await MainActor.run {
                     self.currentCredit = creditData.total_credits - creditData.total_usage
                     self.totalUsage = creditData.total_usage
                     self.apiKeyStatuses = orderedStatuses
-                    
-                    if let usage = tokenUsage {
-                        self.tokensIn = usage.tokensIn
-                        self.tokensOut = usage.tokensOut
-                    }
                     
                     self.lastUpdated = now
                     self.isLoading = false
@@ -497,8 +471,6 @@ class OpenRouterCreditManager: ObservableObject {
                     
                     let newEntry = TokenUsageEntry(
                         id: UUID().uuidString,
-                        tokensIn: tokenUsage?.tokensIn,
-                        tokensOut: tokenUsage?.tokensOut,
                         usageCost: totalKeyUsage,
                         date: now
                     )
@@ -511,7 +483,6 @@ class OpenRouterCreditManager: ObservableObject {
             } else {
                 async let keyDetailsTask = fetchKeyDetailsFromAPI(key: apiKey)
                 let (creditData, keyDetails) = try await (creditTask, keyDetailsTask)
-                let tokenUsage = await tokenUsageTask.value
                 
                 let now = Date()
 
@@ -521,19 +492,12 @@ class OpenRouterCreditManager: ObservableObject {
                     self.usageCost = keyDetails.usage
                     self.limitCost = keyDetails.limit
                     
-                    if let usage = tokenUsage {
-                        self.tokensIn = usage.tokensIn
-                        self.tokensOut = usage.tokensOut
-                    }
-                    
                     self.lastUpdated = now
                     self.isLoading = false
                     
                     // Save to historical file
                     let newEntry = TokenUsageEntry(
                         id: UUID().uuidString,
-                        tokensIn: tokenUsage?.tokensIn,
-                        tokensOut: tokenUsage?.tokensOut,
                         usageCost: keyDetails.usage,
                         date: now
                     )
@@ -558,41 +522,6 @@ class OpenRouterCreditManager: ObservableObject {
                 self.errorMessage = error.localizedDescription
                 self.isLoading = false
             }
-        }
-    }
-
-    private func fetchAndCacheAllActivity(key: String? = nil) async {
-        let apiKey = key ?? self.apiKey
-        guard !apiKey.isEmpty, let url = URL(string: "https://openrouter.ai/api/v1/activity") else { return }
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else { return }
-            
-            let activityResponse = try JSONDecoder().decode(ActivityResponse.self, from: data)
-            let items = activityResponse.data.activity
-            
-            let entries = items.map {
-                TokenUsageEntry(
-                    id: $0.id ?? UUID().uuidString,
-                    tokensIn: $0.effectiveTokensIn,
-                    tokensOut: $0.effectiveTokensOut,
-                    usageCost: $0.cost,
-                    date: ISO8601DateFormatter().date(from: $0.timestamp ?? "") ?? Date()
-                )
-            }
-            
-            self.storageManager.mergeHistory(entries)
-            
-            let history = self.storageManager.loadHistory()
-            await MainActor.run {
-                self.updateCumulativeStats(history: history)
-            }
-        } catch {
-            print("Failed to fetch activity history: \(error)")
         }
     }
 
@@ -653,194 +582,9 @@ class OpenRouterCreditManager: ObservableObject {
         let creditResponse = try JSONDecoder().decode(CreditResponse.self, from: data)
         return creditResponse.data
     }
-
-    private func fetchTokenUsageFromAPI(key: String? = nil) async throws -> TokenUsageData {
-        let apiKey = key ?? self.apiKey
-        do {
-            let usageData = try await fetchTokenUsageFromUsageEndpoint(key: apiKey)
-            return usageData
-        } catch {
-            let activityData = try await fetchTokenUsageFromActivityEndpoint(key: apiKey)
-            return activityData
-        }
-    }
-
-    private func fetchTokenUsageFromUsageEndpoint(key: String) async throws -> TokenUsageData {
-        guard let url = URL(string: "https://openrouter.ai/api/v1/usage") else { 
-            throw URLError(.badURL)
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw OpenRouterAPIError.invalidResponse
-        }
-
-        if !(200...299).contains(httpResponse.statusCode) {
-            let body = String(data: data, encoding: .utf8) ?? "no body"
-            let logMsg = "Usage API Error \(httpResponse.statusCode): \(body)\n"
-            if let logData = logMsg.data(using: .utf8) {
-                let fileURL = URL(fileURLWithPath: "/tmp/openrouter_debug.log")
-                if let handle = try? FileHandle(forWritingTo: fileURL) {
-                    handle.seekToEndOfFile()
-                    handle.write(logData)
-                    handle.closeFile()
-                }
-            }
-            
-            if httpResponse.statusCode == 403 {
-                throw OpenRouterAPIError.forbidden("API key may not have permission for token usage endpoints")
-            } else if httpResponse.statusCode == 401 {
-                throw OpenRouterAPIError.unauthorized("Invalid or expired API key")
-            } else if httpResponse.statusCode == 429 {
-                throw OpenRouterAPIError.rateLimited("API rate limit exceeded")
-            } else {
-                throw OpenRouterAPIError.httpStatus(httpResponse.statusCode)
-            }
-        }
-
-        do {
-            let usageResponse = try JSONDecoder().decode(UsageResponse.self, from: data)
-            return TokenUsageData(tokensIn: usageResponse.data.tokens_in, tokensOut: usageResponse.data.tokens_out)
-        } catch {
-            if let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
-               let dataDict = json["data"] as? [String: Any] {
-                let tokensIn = dataDict["tokens_in"] as? Int ?? dataDict["total_tokens_in"] as? Int ?? 0
-                let tokensOut = dataDict["tokens_out"] as? Int ?? dataDict["total_tokens_out"] as? Int ?? 0
-                return TokenUsageData(tokensIn: tokensIn, tokensOut: tokensOut)
-            }
-            throw error
-        }
-    }
-
-    private func fetchTokenUsageFromActivityEndpoint(key: String) async throws -> TokenUsageData {
-        guard let url = URL(string: "https://openrouter.ai/api/v1/activity") else { 
-            throw URLError(.badURL)
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw OpenRouterAPIError.invalidResponse
-        }
-
-        if !(200...299).contains(httpResponse.statusCode) {
-            let body = String(data: data, encoding: .utf8) ?? "no body"
-            let logMsg = "Activity API Error \(httpResponse.statusCode): \(body)\n"
-            if let logData = logMsg.data(using: .utf8) {
-                let fileURL = URL(fileURLWithPath: "/tmp/openrouter_debug.log")
-                if let handle = try? FileHandle(forWritingTo: fileURL) {
-                    handle.seekToEndOfFile()
-                    handle.write(logData)
-                    handle.closeFile()
-                }
-            }
-
-            if httpResponse.statusCode == 403 {
-                throw OpenRouterAPIError.forbidden("API key may not have permission for activity endpoint")
-            } else if httpResponse.statusCode == 401 {
-                throw OpenRouterAPIError.unauthorized("Invalid or expired API key")
-            } else if httpResponse.statusCode == 429 {
-                throw OpenRouterAPIError.rateLimited("API rate limit exceeded")
-            } else {
-                throw OpenRouterAPIError.httpStatus(httpResponse.statusCode)
-            }
-        }
-
-        do {
-            let activityResponse = try JSONDecoder().decode(ActivityResponse.self, from: data)
-            
-            let totalIn = activityResponse.data.total_tokens_in ?? 0
-            let totalOut = activityResponse.data.total_tokens_out ?? 0
-
-            if totalIn == 0 && totalOut == 0 {
-                let sumIn = activityResponse.data.activity.reduce(0) { $0 + $1.effectiveTokensIn }
-                let sumOut = activityResponse.data.activity.reduce(0) { $0 + $1.effectiveTokensOut }
-                return TokenUsageData(tokensIn: sumIn, tokensOut: sumOut)
-            }
-            
-            return TokenUsageData(tokensIn: totalIn, tokensOut: totalOut)
-        } catch {
-            if let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
-               let dataDict = json["data"] as? [String: Any] {
-                
-                let tokensIn = dataDict["total_tokens_in"] as? Int ?? dataDict["tokens_in"] as? Int
-                let tokensOut = dataDict["total_tokens_out"] as? Int ?? dataDict["tokens_out"] as? Int
-                
-                if let tIn = tokensIn, let tOut = tokensOut, (tIn > 0 || tOut > 0) {
-                    return TokenUsageData(tokensIn: tIn, tokensOut: tOut)
-                }
-                
-                if let activityArray = dataDict["activity"] as? [[String: Any]] {
-                    let sumIn = activityArray.reduce(0) { 
-                        $0 + ($1["tokens_in"] as? Int ?? $1["prompt_tokens"] as? Int ?? 0) 
-                    }
-                    let sumOut = activityArray.reduce(0) { 
-                        $0 + ($1["tokens_out"] as? Int ?? $1["completion_tokens"] as? Int ?? 0) 
-                    }
-                    return TokenUsageData(tokensIn: sumIn, tokensOut: sumOut)
-                }
-            }
-            throw error
-        }
-    }
 }
 
 // Data models
-struct UsageResponse: Codable {
-    let data: UsageData
-}
-
-struct UsageData: Codable {
-    let tokens_in: Int
-    let tokens_out: Int
-    let period: String
-}
-
-struct ActivityResponse: Codable {
-    let data: ActivityData
-}
-
-struct ActivityData: Codable {
-    let activity: [ActivityItem]
-    let total_tokens_in: Int?
-    let total_tokens_out: Int?
-}
-
-struct ActivityItem: Codable {
-    let id: String?
-    let model: String?
-    let tokens_in: Int?
-    let tokens_out: Int?
-    let prompt_tokens: Int?
-    let completion_tokens: Int?
-    let timestamp: String?
-    let cost: Double?
-    
-    var effectiveTokensIn: Int {
-        return tokens_in ?? prompt_tokens ?? 0
-    }
-    
-    var effectiveTokensOut: Int {
-        return tokens_out ?? completion_tokens ?? 0
-    }
-}
-
-struct TokenUsageData {
-    let tokensIn: Int
-    let tokensOut: Int
-}
-
 struct CreditResponse: Codable {
     let data: CreditData
 }
@@ -865,8 +609,6 @@ struct KeyAuthData: Codable {
 // File Storage
 struct TokenUsageEntry: Codable, Identifiable {
     let id: String
-    let tokensIn: Int?
-    let tokensOut: Int?
     let usageCost: Double?
     let date: Date
 }
