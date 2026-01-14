@@ -27,14 +27,14 @@ struct MenuBarViewSingleRow: View {
     }
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             HStack {
                 Image(systemName: "creditcard")
                     .foregroundColor(.blue)
                 Text("OpenRouter Credit")
                     .font(.headline)
             }
-            .padding(.top, 8)
+            .padding(.top, 2)
 
             Divider()
 
@@ -47,13 +47,54 @@ struct MenuBarViewSingleRow: View {
                 }
             } else if let credit = creditManager.currentCredit {
                 VStack(spacing: 4) {
-                    // Credit Amount
+                    // Credit Amount (Total Account Credit)
                     Text(String(format: "$%.4f", credit))
                         .font(.system(size: 12))
-                        .fontWeight(.medium)
+                        .fontWeight(.regular)
                         .frame(maxWidth: .infinity)
                     
-                    // Token Usage Stats
+                    if creditManager.useMultipleKeys {
+                        // Multi-Key View
+                        VStack(spacing: 2) {
+                            ForEach(creditManager.apiKeyStatuses) { status in
+                                HStack {
+                                    Text(status.entry.name)
+                                        .fontWeight(.medium)
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                    Spacer()
+                                    if let usage = status.usage {
+                                        if let limit = status.limit {
+                                            Text("$\(String(format: "%.4f", usage)) / $\(String(format: "%.2f", limit))")
+                                        } else {
+                                            Text("$\(String(format: "%.4f", usage))")
+                                        }
+                                    } else {
+                                        Text("-")
+                                    }
+                                }
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(.horizontal, 4)
+                        
+                    } else {
+                        // Single Key View
+                        if let usage = creditManager.usageCost {
+                            if let limit = creditManager.limitCost {
+                                Text("Used: $\(String(format: "%.4f", usage)) / $\(String(format: "%.2f", limit))")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.secondary)
+                            } else {
+                                Text("Used: $\(String(format: "%.4f", usage))")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    
+                    // Token Usage Stats (Global)
                     if let tokensIn = creditManager.tokensIn, let tokensOut = creditManager.tokensOut {
                         HStack(spacing: 12) {
                             HStack(spacing: 2) {
@@ -70,6 +111,7 @@ struct MenuBarViewSingleRow: View {
                         }
                         .font(.system(size: 9))
                         .foregroundColor(.secondary)
+                        .padding(.top, 2)
                     }
                     
                     if let lastUpdated = creditManager.lastUpdated {
@@ -79,7 +121,7 @@ struct MenuBarViewSingleRow: View {
                             .padding(.top, 1)
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, 2)
             } else if let error = creditManager.errorMessage {
                 VStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle")
@@ -91,14 +133,14 @@ struct MenuBarViewSingleRow: View {
                         .font(.caption2)
                         .multilineTextAlignment(.center)
                 }
-            } else if creditManager.apiKey.isEmpty {
+            } else if (creditManager.useMultipleKeys ? creditManager.apiKeyEntries.isEmpty : creditManager.apiKey.isEmpty) {
                 VStack(spacing: 4) {
                     Image(systemName: "key.fill")
                         .foregroundColor(.blue)
                     Text("API Key Required")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    Text("Please set your OpenRouter API key in Settings to track your credit balance.")
+                    Text("Please configure your OpenRouter API key(s) in Settings.")
                         .font(.caption2)
                         .multilineTextAlignment(.center)
                 }
@@ -106,7 +148,7 @@ struct MenuBarViewSingleRow: View {
 
             Divider()
 
-            VStack(spacing: 8) {
+            VStack(spacing: 4) {
                 Button("Refresh") {
                     Task {
                         await creditManager.fetchCredit()
@@ -132,7 +174,7 @@ struct MenuBarViewSingleRow: View {
                 .controlSize(.small)
             }
         }
-        .padding()
-        .frame(width: 200)
+        .padding(10)
+        .frame(width: 220) // Slightly wider for key names
     }
 }

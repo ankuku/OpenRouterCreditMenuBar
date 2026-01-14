@@ -43,7 +43,7 @@ struct MenuBarView: View {
                     // Row 1: Credit Amount
                     Text("$\(String(format: "%.4f", credit))")
                         .font(.headline)
-                        .fontWeight(.medium)
+                        .fontWeight(.regular)
                         .frame(maxWidth: .infinity)
 
                     // Row 2: Token Usage Stats
@@ -65,6 +65,11 @@ struct MenuBarView: View {
                         }
                         .font(.caption2)
                         .foregroundColor(.secondary)
+                    } else if let usage = creditManager.usageCost {
+                        Text("Usage: $\(String(format: "%.4f", usage))")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .padding(.top, 2)
                     }
 
                     if let lastUpdated = creditManager.lastUpdated {

@@ -9,12 +9,9 @@ import SwiftUI
 
 @main
 struct OpenRouterCreditMenuBarApp: App {
-    // Use the AppDelegate for menu bar functionality
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        // Menu bar apps should not have automatic windows
-        // Settings window will be shown programmatically when needed
         Settings {
             SettingsView()
                 .environmentObject(appDelegate.creditManager)
@@ -23,31 +20,95 @@ struct OpenRouterCreditMenuBarApp: App {
     }
 }
 
+struct MenuBarDisplayView: View {
+    @ObservedObject var creditManager: OpenRouterCreditManager
+    
+    private func formatTokens(_ tokens: Int) -> String {
+        if tokens >= 1_000_000 {
+            return String(format: "%.1fM", Double(tokens) / 1_000_000)
+        } else if tokens >= 1_000 {
+            return String(format: "%.1fK", Double(tokens) / 1_000)
+        } else {
+            return "\(tokens)"
+        }
+    }
+    
+    var body: some View {
+        VStack(alignment: .center, spacing: 0) {
+            if let credit = creditManager.currentCredit {
+                // Row 1: Credit
+                Text("$\(String(format: "%.2f", credit))")
+                    .font(.system(size: 10, weight: .regular))
+                    .frame(height: 11, alignment: .bottom)
+                
+                // Row 2: Tokens
+                if let tokensIn = creditManager.tokensIn, let tokensOut = creditManager.tokensOut {
+                    Text("\(formatTokens(tokensIn))/\(formatTokens(tokensOut))")
+                        .font(.system(size: 8, weight: .regular))
+                        .foregroundColor(.secondary)
+                        .frame(height: 9, alignment: .top)
+                } else {
+                    // Placeholder to maintain 2-row layout height if tokens not yet loaded
+                    Text("- / -")
+                        .font(.system(size: 8, weight: .regular))
+                        .foregroundColor(.secondary)
+                        .frame(height: 9, alignment: .top)
+                }
+            } else {
+                Text("Loading...")
+                    .font(.system(size: 10, weight: .regular))
+            }
+        }
+        .padding(.horizontal, 2)
+        .frame(height: 22) // Explicitly match menu bar height
+    }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     var popover: NSPopover?
     var settingsWindow: NSWindow?
     @Published var creditManager = OpenRouterCreditManager()
+    var hostingView: NSHostingView<MenuBarDisplayView>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // ซ่อน dock icon แต่ยังคงให้ app สามารถแสดง window ได้
         NSApp.setActivationPolicy(.accessory)
 
-        // ปิดเฉพาะ main window ไม่ใช่ทุก window
         if let mainWindow = NSApp.windows.first(where: { $0.title.isEmpty }) {
             mainWindow.close()
         }
 
-        // สร้าง menu bar item
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let statusButton = statusItem?.button {
-            statusButton.title = "Loading..."
+            // clear default title
+            statusButton.title = ""
+            
+            let view = MenuBarDisplayView(creditManager: creditManager)
+            hostingView = NSHostingView(rootView: view)
+            
+            if let hostingView = hostingView {
+                // Important: Set frame to ensure visibility immediately
+                hostingView.frame = NSRect(x: 0, y: 0, width: 100, height: 22)
+                hostingView.autoresizingMask = [.width, .height]
+                statusButton.addSubview(hostingView)
+                
+                // Add constraints to ensure it expands the button
+                hostingView.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([
+                    hostingView.topAnchor.constraint(equalTo: statusButton.topAnchor),
+                    hostingView.bottomAnchor.constraint(equalTo: statusButton.bottomAnchor),
+                    hostingView.leadingAnchor.constraint(equalTo: statusButton.leadingAnchor),
+                    hostingView.trailingAnchor.constraint(equalTo: statusButton.trailingAnchor),
+                    // Set a width that fits our text comfortably
+                    hostingView.widthAnchor.constraint(equalToConstant: 80)
+                ])
+            }
+            
             statusButton.action = #selector(showMenu)
             statusButton.target = self
         }
 
-        // สร้าง popover
         popover = NSPopover()
         popover?.contentViewController = NSHostingController(
             rootView: MenuBarViewSingleRow()
@@ -55,46 +116,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
         popover?.behavior = .transient
 
-        // Start monitoring (this sets up the timer and does initial fetch)
         creditManager.startMonitoring()
-
-        // Set up timer to update menu bar title when credit changes
-        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
-            self.updateMenuBarTitle()
-        }
     }
 
     @objc func showSettingsWindow() {
-        // Temporarily change activation policy to regular for proper window focus
         let originalPolicy = NSApp.activationPolicy()
         NSApp.setActivationPolicy(.regular)
 
         if settingsWindow == nil {
-            // Create Settings window programmatically
             let settingsView = SettingsView()
                 .environmentObject(creditManager)
-                .frame(minWidth: 400, minHeight: 450)  // Taller window
+                .frame(minWidth: 400, minHeight: 450)
 
             let hostingController = NSHostingController(rootView: settingsView)
             settingsWindow = NSWindow(contentViewController: hostingController)
             settingsWindow?.title = "Settings"
-            settingsWindow?.setContentSize(NSSize(width: 400, height: 450))  // Taller window
+            settingsWindow?.setContentSize(NSSize(width: 400, height: 450))
             settingsWindow?.center()
-
-            // Set window behavior for proper focus
             settingsWindow?.collectionBehavior = [.canJoinAllSpaces, .fullScreenPrimary]
             settingsWindow?.level = .floating
-
-            // Make key and order front with proper activation
             settingsWindow?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         } else {
-            // Bring existing window to front
             settingsWindow?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
 
-        // Restore original activation policy when window closes
         NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification,
             object: settingsWindow,
@@ -113,14 +160,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 popover?.show(
                     relativeTo: statusButton.bounds, of: statusButton, preferredEdge: .minY)
             }
-        }
-    }
-
-    func updateMenuBarTitle() {
-        if let credit = creditManager.currentCredit {
-            statusItem?.button?.title = "$\(String(format: "%.2f", credit))"
-        } else {
-            statusItem?.button?.title = "Error"
         }
     }
 }
