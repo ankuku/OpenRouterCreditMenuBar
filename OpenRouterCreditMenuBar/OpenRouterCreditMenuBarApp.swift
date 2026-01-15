@@ -94,6 +94,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func showSettingsWindow() {
+        // Close popover first to ensure clean state
+        if popover?.isShown == true {
+            popover?.performClose(nil)
+        }
+
         let originalPolicy = NSApp.activationPolicy()
         NSApp.setActivationPolicy(.regular)
 
@@ -109,20 +114,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             settingsWindow?.center()
             settingsWindow?.collectionBehavior = [.canJoinAllSpaces, .fullScreenPrimary]
             settingsWindow?.level = .floating
-            settingsWindow?.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-        } else {
-            settingsWindow?.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            
+            // Handle window closing
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: settingsWindow,
+                queue: .main
+            ) { [weak self] _ in
+                // Only revert if we are not keeping it open for some other reason (simple logic here)
+                NSApp.setActivationPolicy(originalPolicy)
+                self?.settingsWindow = nil
+            }
         }
-
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification,
-            object: settingsWindow,
-            queue: .main
-        ) { [weak self] _ in
-            NSApp.setActivationPolicy(originalPolicy)
-            self?.settingsWindow = nil
+        
+        // Ensure activation happens after current runloop cycle to allow policy change to take effect
+        DispatchQueue.main.async {
+            self.settingsWindow?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 
