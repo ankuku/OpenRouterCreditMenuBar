@@ -25,6 +25,7 @@ enum ConnectionErrorType: String {
     case networkError = "Network Error"
     case invalidResponse = "Invalid Response"
     case unknown = "Unknown Error"
+    case partialFailure = "Partial Failure"
 }
 
 extension OpenRouterAPIError {
@@ -61,11 +62,33 @@ struct ConnectionTestResult {
     let errorMessage: String?
 }
 
+struct APIKeyEntry: Codable, Hashable, Identifiable {
+    var id: UUID = UUID()
+    let key: String
+    let name: String
+}
+
+struct APIKeyStatus: Identifiable {
+    var id: UUID { entry.id }
+    let entry: APIKeyEntry
+    var usage: Double?
+    var limit: Double?
+    var error: String?
+}
+
 class OpenRouterCreditManager: ObservableObject {
     @Published var currentCredit: Double?
     @Published var totalUsage: Double?
-    @Published var tokensIn: Int?
-    @Published var tokensOut: Int?
+    @Published var usageCost: Double?
+    @Published var limitCost: Double?
+    
+    // Multi-key support
+    @Published var apiKeyStatuses: [APIKeyStatus] = []
+    
+    // Cumulative Stats
+    @Published var cumulativeUsageCost: Double = 0.0
+    
+    @Published var lastUpdated: Date?
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var connectionTestStatus: ConnectionTestResult? = nil
@@ -73,25 +96,189 @@ class OpenRouterCreditManager: ObservableObject {
 
     private let userDefaults = UserDefaults.standard
     private var refreshTimer: Timer?
+    private let storageManager = FileStorageManager()
+    
+    private var cachedAPIKey: String? = nil
+    private var cachedAPIKeyEntries: [APIKeyEntry]? = nil
+
+    var useMultipleKeys: Bool {
+        get {
+            userDefaults.bool(forKey: "use_multiple_keys")
+        }
+        set {
+            userDefaults.set(newValue, forKey: "use_multiple_keys")
+            // Clear caches to force reload if needed
+            cachedAPIKey = nil
+            cachedAPIKeyEntries = nil
+            
+            Task {
+                 await fetchCredit()
+            }
+        }
+    }
+
+    var apiKey: String {
+        get {
+            if let cached = cachedAPIKey {
+                return cached
+            }
+            let key = SimpleSecureStorage.retrieveAPIKeySecurely() ?? ""
+            cachedAPIKey = key
+            return key
+        }
+        set {
+            // Trim whitespace and newlines
+            let cleanKey = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            // Clear cache when setting new value
+            cachedAPIKey = nil
+            if !cleanKey.isEmpty {
+                _ = SimpleSecureStorage.storeAPIKeySecurely(cleanKey)
+            }
+            else {
+                SimpleSecureStorage.clearAPIKeySecurely()
+            }
+        }
+    }
+    
+    var apiKeyEntries: [APIKeyEntry] {
+        get {
+            if let cached = cachedAPIKeyEntries {
+                return cached
+            }
+            let entries = SimpleSecureStorage.retrieveAPIKeyEntriesSecurely()
+            cachedAPIKeyEntries = entries
+            return entries
+        }
+        set {
+            cachedAPIKeyEntries = nil
+            _ = SimpleSecureStorage.storeAPIKeyEntriesSecurely(newValue)
+        }
+    }
+
+    var isEnabled: Bool {
+        get {
+            userDefaults.bool(forKey: "app_enabled")
+        }
+        set {
+            userDefaults.set(newValue, forKey: "app_enabled")
+        }
+    }
+
+    var refreshInterval: Double {
+        get {
+            let interval = userDefaults.double(forKey: "refresh_interval")
+            return interval > 0 ? interval : 300  // default 5 minutes
+        }
+        set {
+            userDefaults.set(newValue, forKey: "refresh_interval")
+            setupTimer()
+        }
+    }
+
+    init() {
+        // Load cached history on initialization
+        let history = storageManager.loadHistory()
+        updateCumulativeStats(history: history)
+        
+        // Also try to load the latest snapshot for display
+        if let latest = history.first { // History is sorted desc
+            self.usageCost = latest.usageCost
+            self.lastUpdated = latest.date
+        }
+        setupTimer()
+    }
+    
+    private func updateCumulativeStats(history: [TokenUsageEntry]) {
+        self.cumulativeUsageCost = history.reduce(0.0) { $0 + ($1.usageCost ?? 0.0) }
+    }
+
+    private func setupTimer() {
+        refreshTimer?.invalidate()
+
+        let hasKey = useMultipleKeys ? !apiKeyEntries.isEmpty : !apiKey.isEmpty
+        guard isEnabled && hasKey else { return }
+
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { _ in
+            Task {
+                await self.fetchCredit()
+            }
+        }
+    }
+
+    func startMonitoring() {
+        setupTimer()
+        Task {
+            await fetchCredit()
+        }
+    }
+
+    func stopMonitoring() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+    }
 
     // MARK: - Connection Testing
 
     @MainActor func testConnection() async {
+        if useMultipleKeys {
+            if let firstEntry = apiKeyEntries.first {
+                isLoading = true
+                connectionTestStatus = nil
+                connectionTestProgress = "Testing OpenRouter API server..."
+                
+                // 1. Test Server Connectivity (Once)
+                // Try auth endpoint, fallback to credits endpoint if needed
+                var connectivityResult = await testAuthEndpoint(key: firstEntry.key)
+                if connectivityResult == nil {
+                     connectivityResult = await testCreditsEndpoint(key: firstEntry.key)
+                }
+                
+                if let result = connectivityResult, result.success {
+                    connectionTestProgress = "Verifying keys..."
+                    // 2. Perform credit check for all keys (Once) via fetchCredit logic
+                    await fetchCredit()
+                    
+                    // Check results
+                    let failedKeys = apiKeyStatuses.filter { $0.error != nil }
+                    if failedKeys.isEmpty {
+                        connectionTestStatus = ConnectionTestResult(success: true, errorType: nil, errorMessage: "All keys verified successfully")
+                        connectionTestProgress = "All tests passed - Connection successful!"
+                    } else {
+                        connectionTestStatus = ConnectionTestResult(success: false, errorType: .partialFailure, errorMessage: "\(failedKeys.count) key(s) failed validation")
+                        connectionTestProgress = "Connection verified, but some keys failed."
+                    }
+                    isLoading = false
+                } else {
+                    isLoading = false
+                    connectionTestStatus = connectivityResult
+                    connectionTestProgress = "Server connection failed."
+                }
+            } else {
+                 isLoading = false
+                 connectionTestStatus = ConnectionTestResult(success: false, errorType: .invalidAPIKey, errorMessage: "No API keys configured")
+            }
+        } else {
+            await testConnection(key: apiKey)
+        }
+    }
+
+    @MainActor func testConnection(key: String) async {
         isLoading = true
         connectionTestStatus = nil
         connectionTestProgress = "Testing OpenRouter API server..."
 
         // Test multiple endpoints in order of preference
-        var result: ConnectionTestResult? = await testAuthEndpoint()
+        var result: ConnectionTestResult? = await testAuthEndpoint(key: key)
 
         if result == nil {
             connectionTestProgress = "Testing credits endpoint..."
-            result = await testCreditsEndpoint()
+            result = await testCreditsEndpoint(key: key)
         }
 
         if result == nil {
             connectionTestProgress = "Testing models endpoint..."
-            result = await testModelsEndpoint()
+            result = await testModelsEndpoint(key: key)
         }
 
         isLoading = false
@@ -105,15 +292,15 @@ class OpenRouterCreditManager: ObservableObject {
         }
     }
 
-    private func testAuthEndpoint() async -> ConnectionTestResult? {
+    private func testAuthEndpoint(key: String) async -> ConnectionTestResult? {
         // Try lightweight auth endpoint first (if it exists)
-        guard let url = URL(string: "https://openrouter.ai/api/v1/auth/check") else {
+        guard let url = URL(string: "https://openrouter.ai/api/v1/auth/check") else { 
             return nil
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
 
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
@@ -143,9 +330,9 @@ class OpenRouterCreditManager: ObservableObject {
         }
     }
 
-    private func testCreditsEndpoint() async -> ConnectionTestResult? {
+    private func testCreditsEndpoint(key: String) async -> ConnectionTestResult? {
         do {
-            let creditData = try await fetchCreditFromAPI()
+            let creditData = try await fetchCreditFromAPI(key: key)
             await MainActor.run {
                 connectionTestProgress = "✓ Credits endpoint: Connected"
             }
@@ -157,14 +344,14 @@ class OpenRouterCreditManager: ObservableObject {
         }
     }
 
-    private func testModelsEndpoint() async -> ConnectionTestResult? {
-        guard let url = URL(string: "https://openrouter.ai/api/v1/models") else {
+    private func testModelsEndpoint(key: String) async -> ConnectionTestResult? {
+        guard let url = URL(string: "https://openrouter.ai/api/v1/models") else { 
             return nil
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -228,78 +415,9 @@ class OpenRouterCreditManager: ObservableObject {
         }
     }
 
-    private var cachedAPIKey: String? = nil
-
-    var apiKey: String {
-        get {
-            if let cached = cachedAPIKey {
-                return cached
-            }
-            let key = SimpleSecureStorage.retrieveAPIKeySecurely() ?? ""
-            cachedAPIKey = key
-            return key
-        }
-        set {
-            // Clear cache when setting new value
-            cachedAPIKey = nil
-            if !newValue.isEmpty {
-                _ = SimpleSecureStorage.storeAPIKeySecurely(newValue)
-            } else {
-                SimpleSecureStorage.clearAPIKeySecurely()
-            }
-        }
-    }
-
-    var isEnabled: Bool {
-        get {
-            userDefaults.bool(forKey: "app_enabled")
-        }
-        set {
-            userDefaults.set(newValue, forKey: "app_enabled")
-        }
-    }
-
-    var refreshInterval: Double {
-        get {
-            let interval = userDefaults.double(forKey: "refresh_interval")
-            return interval > 0 ? interval : 300  // default 5 minutes
-        }
-        set {
-            userDefaults.set(newValue, forKey: "refresh_interval")
-            setupTimer()
-        }
-    }
-
-    init() {
-        setupTimer()
-    }
-
-    private func setupTimer() {
-        refreshTimer?.invalidate()
-
-        guard isEnabled && !apiKey.isEmpty else { return }
-
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { _ in
-            Task {
-                await self.fetchCredit()
-            }
-        }
-    }
-
-    func startMonitoring() {
-        setupTimer()
-        Task {
-            await fetchCredit()
-        }
-    }
-
-    func stopMonitoring() {
-        refreshTimer?.invalidate()
-        refreshTimer = nil
-    }
-
     func fetchCredit() async {
-        guard !apiKey.isEmpty && isEnabled else { return }
+        let hasKey = useMultipleKeys ? !apiKeyEntries.isEmpty : !apiKey.isEmpty
+        guard hasKey && isEnabled else { return }
 
         await MainActor.run {
             isLoading = true
@@ -307,23 +425,93 @@ class OpenRouterCreditManager: ObservableObject {
         }
 
         do {
-            let creditData = try await fetchCreditFromAPI()
+            let primaryKey = useMultipleKeys ? apiKeyEntries.first!.key : apiKey
+            
+            async let creditTask = fetchCreditFromAPI(key: primaryKey)
 
-            await MainActor.run {
-                self.currentCredit = creditData.total_credits - creditData.total_usage
-                self.totalUsage = creditData.total_usage
-                self.tokensIn = nil
-                self.tokensOut = nil
-                self.isLoading = false
+            if useMultipleKeys {
+                var newStatuses: [APIKeyStatus] = []
+                
+                await withTaskGroup(of: APIKeyStatus.self) {
+                    group in
+                    for entry in apiKeyEntries {
+                        group.addTask {
+                            do {
+                                let details = try await self.fetchKeyDetailsFromAPI(key: entry.key)
+                                return APIKeyStatus(entry: entry, usage: details.usage, limit: details.limit, error: nil)
+                            } catch {
+                                return APIKeyStatus(entry: entry, usage: nil, limit: nil, error: error.localizedDescription)
+                            }
+                        }
+                    }
+                    
+                    for await status in group {
+                        newStatuses.append(status)
+                    }
+                }
+                
+                // Restore order
+                let orderedStatuses = apiKeyEntries.compactMap { entry in
+                    newStatuses.first(where: { $0.entry.id == entry.id })
+                }
+                
+                let creditData = try await creditTask
+                let now = Date()
+                
+                await MainActor.run {
+                    self.currentCredit = creditData.total_credits - creditData.total_usage
+                    self.totalUsage = creditData.total_usage
+                    self.apiKeyStatuses = orderedStatuses
+                    
+                    self.lastUpdated = now
+                    self.isLoading = false
+                    
+                    // For history, sum up usage from keys
+                    let totalKeyUsage = orderedStatuses.reduce(0.0) { $0 + ($1.usage ?? 0.0) }
+                    
+                    let newEntry = TokenUsageEntry(
+                        id: UUID().uuidString,
+                        usageCost: totalKeyUsage,
+                        date: now
+                    )
+                    self.storageManager.appendEntry(newEntry)
+                    
+                    let history = self.storageManager.loadHistory()
+                    self.updateCumulativeStats(history: history)
+                }
+                
+            } else {
+                async let keyDetailsTask = fetchKeyDetailsFromAPI(key: apiKey)
+                let (creditData, keyDetails) = try await (creditTask, keyDetailsTask)
+                
+                let now = Date()
+
+                await MainActor.run {
+                    self.currentCredit = creditData.total_credits - creditData.total_usage
+                    self.totalUsage = creditData.total_usage
+                    self.usageCost = keyDetails.usage
+                    self.limitCost = keyDetails.limit
+                    
+                    self.lastUpdated = now
+                    self.isLoading = false
+                    
+                    // Save to historical file
+                    let newEntry = TokenUsageEntry(
+                        id: UUID().uuidString,
+                        usageCost: keyDetails.usage,
+                        date: now
+                    )
+                    self.storageManager.appendEntry(newEntry)
+                    
+                    // Update cumulative stats from the full history
+                    let history = self.storageManager.loadHistory()
+                    self.updateCumulativeStats(history: history)
+                }
             }
+            
         } catch let error as OpenRouterAPIError {
             await MainActor.run {
-                // Update error messages to be strictly about credit tracking
-                if error.localizedDescription.contains("token") || error.localizedDescription.contains("Token") {
-                    self.errorMessage = "Invalid or missing API key for credit tracking"
-                } else {
-                    self.errorMessage = error.localizedDescription
-                }
+                self.errorMessage = error.localizedDescription
                 if let suggestion = error.recoverySuggestion {
                     self.errorMessage? += "\n" + suggestion
                 }
@@ -337,8 +525,35 @@ class OpenRouterCreditManager: ObservableObject {
         }
     }
 
-    private func fetchCreditFromAPI() async throws -> CreditData {
-        guard let url = URL(string: "https://openrouter.ai/api/v1/credits") else {
+    private func fetchKeyDetailsFromAPI(key: String? = nil) async throws -> KeyAuthData {
+        let apiKey = key ?? self.apiKey
+        guard let url = URL(string: "https://openrouter.ai/api/v1/auth/key") else { 
+            throw URLError(.badURL)
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw OpenRouterAPIError.invalidResponse
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? "no body"
+            print("Auth/Key API Error \(httpResponse.statusCode): \(body)")
+            throw OpenRouterAPIError.httpStatus(httpResponse.statusCode)
+        }
+
+        let keyResponse = try JSONDecoder().decode(KeyAuthResponse.self, from: data)
+        return keyResponse.data
+    }
+
+    private func fetchCreditFromAPI(key: String? = nil) async throws -> CreditData {
+        let apiKey = key ?? self.apiKey
+        guard let url = URL(string: "https://openrouter.ai/api/v1/credits") else { 
             throw URLError(.badURL)
         }
 
@@ -367,142 +582,9 @@ class OpenRouterCreditManager: ObservableObject {
         let creditResponse = try JSONDecoder().decode(CreditResponse.self, from: data)
         return creditResponse.data
     }
-
-    private func fetchTokenUsageFromAPI() async throws -> TokenUsageData {
-        // Try usage endpoint first
-        do {
-            let usageData = try await fetchTokenUsageFromUsageEndpoint()
-            return usageData
-        } catch {
-            // Fallback to activity endpoint
-            let activityData = try await fetchTokenUsageFromActivityEndpoint()
-            return activityData
-        }
-    }
-
-    private func fetchTokenUsageFromUsageEndpoint() async throws -> TokenUsageData {
-        guard let url = URL(string: "https://openrouter.ai/api/v1/usage") else {
-            throw URLError(.badURL)
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw OpenRouterAPIError.invalidResponse
-        }
-
-        guard (200...299).contains(httpResponse.statusCode) else {
-            if httpResponse.statusCode == 403 {
-                throw OpenRouterAPIError.forbidden("API key may not have permission for token usage endpoints")
-            } else if httpResponse.statusCode == 401 {
-                throw OpenRouterAPIError.unauthorized("Invalid or expired API key")
-            } else if httpResponse.statusCode == 429 {
-                throw OpenRouterAPIError.rateLimited("API rate limit exceeded")
-            } else {
-                throw OpenRouterAPIError.httpStatus(httpResponse.statusCode)
-            }
-        }
-
-        do {
-            let usageResponse = try JSONDecoder().decode(UsageResponse.self, from: data)
-            return TokenUsageData(tokensIn: usageResponse.data.tokens_in, tokensOut: usageResponse.data.tokens_out)
-        } catch {
-            // Try manual extraction
-            if let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
-               let dataDict = json["data"] as? [String: Any] {
-                let tokensIn = dataDict["tokens_in"] as? Int ?? dataDict["total_tokens_in"] as? Int ?? 0
-                let tokensOut = dataDict["tokens_out"] as? Int ?? dataDict["total_tokens_out"] as? Int ?? 0
-                return TokenUsageData(tokensIn: tokensIn, tokensOut: tokensOut)
-            }
-            throw error
-        }
-    }
-
-    private func fetchTokenUsageFromActivityEndpoint() async throws -> TokenUsageData {
-        guard let url = URL(string: "https://openrouter.ai/api/v1/activity") else {
-            throw URLError(.badURL)
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw OpenRouterAPIError.invalidResponse
-        }
-
-        guard (200...299).contains(httpResponse.statusCode) else {
-            if httpResponse.statusCode == 403 {
-                throw OpenRouterAPIError.forbidden("API key may not have permission for token usage endpoints")
-            } else if httpResponse.statusCode == 401 {
-                throw OpenRouterAPIError.unauthorized("Invalid or expired API key")
-            } else if httpResponse.statusCode == 429 {
-                throw OpenRouterAPIError.rateLimited("API rate limit exceeded")
-            } else {
-                throw OpenRouterAPIError.httpStatus(httpResponse.statusCode)
-            }
-        }
-
-        do {
-            let activityResponse = try JSONDecoder().decode(ActivityResponse.self, from: data)
-            return TokenUsageData(tokensIn: activityResponse.data.total_tokens_in, tokensOut: activityResponse.data.total_tokens_out)
-        } catch {
-            // Try manual extraction
-            if let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
-               let dataDict = json["data"] as? [String: Any] {
-                let tokensIn = dataDict["total_tokens_in"] as? Int ?? dataDict["tokens_in"] as? Int ?? 0
-                let tokensOut = dataDict["total_tokens_out"] as? Int ?? dataDict["tokens_out"] as? Int ?? 0
-                return TokenUsageData(tokensIn: tokensIn, tokensOut: tokensOut)
-            }
-            throw error
-        }
-    }
 }
 
-// Data models for token usage
-struct UsageResponse: Codable {
-    let data: UsageData
-}
-
-struct UsageData: Codable {
-    let tokens_in: Int
-    let tokens_out: Int
-    let period: String
-}
-
-struct ActivityResponse: Codable {
-    let data: ActivityData
-}
-
-struct ActivityData: Codable {
-    let activity: [ActivityItem]
-    let total_tokens_in: Int
-    let total_tokens_out: Int
-}
-
-struct ActivityItem: Codable {
-    let id: String
-    let model: String
-    let tokens_in: Int
-    let tokens_out: Int
-    let timestamp: String
-    let cost: Double
-}
-
-struct TokenUsageData {
-    let tokensIn: Int
-    let tokensOut: Int
-}
-
-
+// Data models
 struct CreditResponse: Codable {
     let data: CreditData
 }
@@ -510,4 +592,72 @@ struct CreditResponse: Codable {
 struct CreditData: Codable {
     let total_credits: Double
     let total_usage: Double
+}
+
+struct KeyAuthResponse: Codable {
+    let data: KeyAuthData
+}
+
+struct KeyAuthData: Codable {
+    let label: String?
+    let name: String?
+    let usage: Double
+    let limit: Double?
+    let limit_remaining: Double?
+}
+
+// File Storage
+struct TokenUsageEntry: Codable, Identifiable {
+    let id: String
+    let usageCost: Double?
+    let date: Date
+}
+
+class FileStorageManager {
+    private let fileName = "usage_history.json"
+    
+    private var fileURL: URL? {
+        guard let documentsDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+        if !FileManager.default.fileExists(atPath: documentsDirectory.path) {
+            try? FileManager.default.createDirectory(at: documentsDirectory, withIntermediateDirectories: true)
+        }
+        return documentsDirectory.appendingPathComponent(fileName)
+    }
+    
+    func appendEntry(_ entry: TokenUsageEntry) {
+        var history = loadHistory()
+        history.append(entry)
+        saveHistory(history)
+    }
+    
+    func mergeHistory(_ newEntries: [TokenUsageEntry]) {
+        var history = loadHistory()
+        var existingIds = Set(history.map { $0.id })
+        
+        for entry in newEntries {
+            if !existingIds.contains(entry.id) {
+                history.append(entry)
+                existingIds.insert(entry.id)
+            }
+        }
+        
+        history.sort { $0.date > $1.date }
+        saveHistory(history)
+    }
+    
+    func saveHistory(_ history: [TokenUsageEntry]) {
+        guard let url = fileURL else { return }
+        if let data = try? JSONEncoder().encode(history) {
+            try? data.write(to: url)
+        }
+    }
+    
+    func loadHistory() -> [TokenUsageEntry] {
+        guard let url = fileURL,
+              let data = try? Data(contentsOf: url),
+              let history = try? JSONDecoder().decode([TokenUsageEntry].self, from: data) else { 
+            return []
+        }
+        return history
+    }
 }

@@ -9,12 +9,9 @@ import SwiftUI
 
 @main
 struct OpenRouterCreditMenuBarApp: App {
-    // Use the AppDelegate for menu bar functionality
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        // Menu bar apps should not have automatic windows
-        // Settings window will be shown programmatically when needed
         Settings {
             SettingsView()
                 .environmentObject(appDelegate.creditManager)
@@ -23,31 +20,68 @@ struct OpenRouterCreditMenuBarApp: App {
     }
 }
 
+struct MenuBarDisplayView: View {
+    @ObservedObject var creditManager: OpenRouterCreditManager
+    
+    var body: some View {
+        VStack(alignment: .center, spacing: 0) {
+            if let credit = creditManager.currentCredit {
+                Text("$\(String(format: "%.2f", credit))")
+                    .font(.system(size: 11, weight: .medium)) // Slightly larger for readability
+            } else {
+                Text("...")
+                    .font(.system(size: 11, weight: .regular))
+            }
+        }
+        .padding(.horizontal, 6)
+        .fixedSize(horizontal: true, vertical: true)
+        .frame(height: 22)
+    }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     var popover: NSPopover?
     var settingsWindow: NSWindow?
     @Published var creditManager = OpenRouterCreditManager()
+    var hostingView: NSHostingView<MenuBarDisplayView>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // ซ่อน dock icon แต่ยังคงให้ app สามารถแสดง window ได้
         NSApp.setActivationPolicy(.accessory)
 
-        // ปิดเฉพาะ main window ไม่ใช่ทุก window
         if let mainWindow = NSApp.windows.first(where: { $0.title.isEmpty }) {
             mainWindow.close()
         }
 
-        // สร้าง menu bar item
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let statusButton = statusItem?.button {
-            statusButton.title = "Loading..."
+            // clear default title
+            statusButton.title = ""
+            
+            let view = MenuBarDisplayView(creditManager: creditManager)
+            hostingView = NSHostingView(rootView: view)
+            
+            if let hostingView = hostingView {
+                // Important: Set frame to ensure visibility immediately
+                hostingView.frame = NSRect(x: 0, y: 0, width: 0, height: 22)
+                hostingView.autoresizingMask = [.width, .height]
+                statusButton.addSubview(hostingView)
+                
+                // Add constraints to ensure it expands the button
+                hostingView.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([
+                    hostingView.topAnchor.constraint(equalTo: statusButton.topAnchor),
+                    hostingView.bottomAnchor.constraint(equalTo: statusButton.bottomAnchor),
+                    hostingView.leadingAnchor.constraint(equalTo: statusButton.leadingAnchor),
+                    hostingView.trailingAnchor.constraint(equalTo: statusButton.trailingAnchor)
+                ])
+            }
+            
             statusButton.action = #selector(showMenu)
             statusButton.target = self
         }
 
-        // สร้าง popover
         popover = NSPopover()
         popover?.contentViewController = NSHostingController(
             rootView: MenuBarViewSingleRow()
@@ -55,53 +89,47 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
         popover?.behavior = .transient
 
-        // Start monitoring (this sets up the timer and does initial fetch)
         creditManager.startMonitoring()
-
-        // Set up timer to update menu bar title when credit changes
-        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
-            self.updateMenuBarTitle()
-        }
     }
 
     @objc func showSettingsWindow() {
-        // Temporarily change activation policy to regular for proper window focus
+        // Close popover first to ensure clean state
+        if popover?.isShown == true {
+            popover?.performClose(nil)
+        }
+
         let originalPolicy = NSApp.activationPolicy()
         NSApp.setActivationPolicy(.regular)
 
         if settingsWindow == nil {
-            // Create Settings window programmatically
             let settingsView = SettingsView()
                 .environmentObject(creditManager)
-                .frame(minWidth: 400, minHeight: 450)  // Taller window
+                .frame(minWidth: 400, minHeight: 450)
 
             let hostingController = NSHostingController(rootView: settingsView)
             settingsWindow = NSWindow(contentViewController: hostingController)
             settingsWindow?.title = "Settings"
-            settingsWindow?.setContentSize(NSSize(width: 400, height: 450))  // Taller window
+            settingsWindow?.setContentSize(NSSize(width: 400, height: 450))
             settingsWindow?.center()
-
-            // Set window behavior for proper focus
             settingsWindow?.collectionBehavior = [.canJoinAllSpaces, .fullScreenPrimary]
             settingsWindow?.level = .floating
-
-            // Make key and order front with proper activation
-            settingsWindow?.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-        } else {
-            // Bring existing window to front
-            settingsWindow?.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            
+            // Handle window closing
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: settingsWindow,
+                queue: .main
+            ) { [weak self] _ in
+                // Only revert if we are not keeping it open for some other reason (simple logic here)
+                NSApp.setActivationPolicy(originalPolicy)
+                self?.settingsWindow = nil
+            }
         }
-
-        // Restore original activation policy when window closes
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification,
-            object: settingsWindow,
-            queue: .main
-        ) { [weak self] _ in
-            NSApp.setActivationPolicy(originalPolicy)
-            self?.settingsWindow = nil
+        
+        // Ensure activation happens after current runloop cycle to allow policy change to take effect
+        DispatchQueue.main.async {
+            self.settingsWindow?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 
@@ -113,14 +141,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 popover?.show(
                     relativeTo: statusButton.bounds, of: statusButton, preferredEdge: .minY)
             }
-        }
-    }
-
-    func updateMenuBarTitle() {
-        if let credit = creditManager.currentCredit {
-            statusItem?.button?.title = "$\(String(format: "%.2f", credit))"
-        } else {
-            statusItem?.button?.title = "Error"
         }
     }
 }

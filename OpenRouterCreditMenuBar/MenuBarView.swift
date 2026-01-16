@@ -2,15 +2,12 @@ import SwiftUI
 
 struct MenuBarView: View {
 
-    private func formatTokens(_ tokens: Int) -> String {
-        if tokens >= 1_000_000 {
-            return String(format: "%.1fM", Double(tokens) / 1_000_000)
-        } else if tokens >= 1_000 {
-            return String(format: "%.1fK", Double(tokens) / 1_000)
-        } else {
-            return "\(tokens)"
-        }
+    private func getRelativeTime(for date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
+
     @EnvironmentObject var creditManager: OpenRouterCreditManager
 
     var body: some View {
@@ -33,13 +30,26 @@ struct MenuBarView: View {
                         .font(.caption)
                 }
             } else if let credit = creditManager.currentCredit {
-                VStack(spacing: 4) {
-                    Text("Available Credit")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                VStack(spacing: 2) {
+                    // Row 1: Credit Amount
                     Text("$\(String(format: "%.4f", credit))")
-                        .font(.title2)
-                        .fontWeight(.semibold)
+                        .font(.headline)
+                        .fontWeight(.regular)
+                        .frame(maxWidth: .infinity)
+
+                    if let usage = creditManager.usageCost {
+                        Text("Usage: $\(String(format: "%.4f", usage))")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .padding(.top, 2)
+                    }
+
+                    if let lastUpdated = creditManager.lastUpdated {
+                        Text("Updated \(getRelativeTime(for: lastUpdated))")
+                            .font(.system(size: 8))
+                            .foregroundColor(.secondary.opacity(0.7))
+                            .padding(.top, 4)
+                    }
                 }
             } else if let error = creditManager.errorMessage {
                 VStack(spacing: 4) {
