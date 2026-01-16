@@ -33,7 +33,8 @@ struct MenuBarDisplayView: View {
                     .font(.system(size: 11, weight: .regular))
             }
         }
-        .padding(.horizontal, 4)
+        .padding(.horizontal, 6)
+        .fixedSize(horizontal: true, vertical: true)
         .frame(height: 22)
     }
 }
@@ -63,7 +64,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             
             if let hostingView = hostingView {
                 // Important: Set frame to ensure visibility immediately
-                hostingView.frame = NSRect(x: 0, y: 0, width: 100, height: 22)
+                hostingView.frame = NSRect(x: 0, y: 0, width: 0, height: 22)
                 hostingView.autoresizingMask = [.width, .height]
                 statusButton.addSubview(hostingView)
                 
@@ -73,9 +74,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     hostingView.topAnchor.constraint(equalTo: statusButton.topAnchor),
                     hostingView.bottomAnchor.constraint(equalTo: statusButton.bottomAnchor),
                     hostingView.leadingAnchor.constraint(equalTo: statusButton.leadingAnchor),
-                    hostingView.trailingAnchor.constraint(equalTo: statusButton.trailingAnchor),
-                    // Set a width that fits our text comfortably
-                    hostingView.widthAnchor.constraint(equalToConstant: 80)
+                    hostingView.trailingAnchor.constraint(equalTo: statusButton.trailingAnchor)
                 ])
             }
             

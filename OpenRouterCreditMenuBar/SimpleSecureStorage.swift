@@ -9,25 +9,7 @@ import Foundation
 import Security
 
 class SimpleSecureStorage {
-    // Store encrypted API key in UserDefaults with Data Protection
-    static func storeAPIKey(_ key: String) {
-        let encryptedData = key.data(using: .utf8)?.base64EncodedData() ?? Data()
-        UserDefaults.standard.set(encryptedData, forKey: "secure_api_key")
-    }
-
-    // Retrieve and decrypt API key from UserDefaults
-    static func retrieveAPIKey() -> String? {
-        guard let encryptedData = UserDefaults.standard.data(forKey: "secure_api_key") else { return nil }
-        guard let decodedData = Data(base64Encoded: encryptedData) else { return nil }
-        return String(data: decodedData, encoding: .utf8)
-    }
-
-    // Clear stored API key
-    static func clearAPIKey() {
-        UserDefaults.standard.removeObject(forKey: "secure_api_key")
-    }
-
-    // More secure version using Keychain (but without the problematic implementation)
+    // More secure version using Keychain
     static func storeAPIKeySecurely(_ key: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -71,45 +53,6 @@ class SimpleSecureStorage {
     }
 
     // MARK: - Multiple Keys Support
-
-    static func storeAPIKeysSecurely(_ keys: [String]) -> Bool {
-        guard let data = try? JSONEncoder().encode(keys) else { return false }
-
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "OpenRouterCreditMenuBar",
-            kSecAttrAccount as String: "api_key_list",
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        ]
-
-        // Delete existing item first
-        SecItemDelete(query as CFDictionary)
-
-        // Add new item
-        let status = SecItemAdd(query as CFDictionary, nil)
-        return status == errSecSuccess
-    }
-
-    static func retrieveAPIKeysSecurely() -> [String] {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "OpenRouterCreditMenuBar",
-            kSecAttrAccount as String: "api_key_list",
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-
-        guard status == errSecSuccess,
-              let data = item as? Data,
-              let keys = try? JSONDecoder().decode([String].self, from: data) else {
-            return []
-        }
-        return keys
-    }
 
     static func storeAPIKeyEntriesSecurely(_ entries: [APIKeyEntry]) -> Bool {
         guard let data = try? JSONEncoder().encode(entries) else { return false }
